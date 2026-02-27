@@ -294,6 +294,7 @@
         let lastShoot = 0;
         let enemySpawnTimer = 0;
         let powerupSpawnTimer = 0;
+        let enemiesKilled = 0;
 
         // 陀螺仪数据
         let gyroData = { x: 0, y: 0, gamma: 0 };
@@ -347,20 +348,37 @@
                 this.height = 70;
                 this.speed = 8;
                 this.powerLevel = 1;
+                this.weaponType = 0; // 武器类型: 0-4
                 this.invincible = false;
                 this.invincibleTime = 0;
                 this.shield = false;
+                // 惯性系统
+                this.velocityX = 0;
+                this.acceleration = 0.8;
+                this.friction = 0.92;
+                this.maxSpeed = 15;
             }
 
             update() {
-                // 陀螺仪控制
+                // 陀螺仪控制 - 带惯性
                 if (useGyro && Math.abs(gyroData.gamma) > 5) {
-                    this.x += gyroData.gamma * 0.15;
+                    // 增加目标速度
+                    const targetVelocity = gyroData.gamma * 0.5;
+                    this.velocityX += (targetVelocity - this.velocityX) * 0.1;
                 } else if (touchX !== null) {
-                    // 触摸控制
-                    const targetX = touchX;
-                    this.x += (targetX - this.x) * 0.1;
+                    // 触摸控制 - 带惯性
+                    const targetVelocity = (touchX - this.x) * 0.3;
+                    this.velocityX += (targetVelocity - this.velocityX) * 0.15;
+                } else {
+                    // 无操作时应用摩擦力
+                    this.velocityX *= this.friction;
                 }
+                
+                // 限制最大速度
+                this.velocityX = Math.max(-this.maxSpeed, Math.min(this.maxSpeed, this.velocityX));
+                
+                // 应用速度
+                this.x += this.velocityX;
 
                 // 边界限制
                 this.x = Math.max(this.width/2, Math.min(canvas.width - this.width/2, this.x));
@@ -384,15 +402,30 @@
             shoot() {
                 const bulletSpeed = 12;
                 
-                if (this.powerLevel === 1) {
-                    bullets.push(new Bullet(this.x, this.y - 30, 0, -bulletSpeed, true));
-                } else if (this.powerLevel === 2) {
-                    bullets.push(new Bullet(this.x - 15, this.y - 20, 0, -bulletSpeed, true));
-                    bullets.push(new Bullet(this.x + 15, this.y - 20, 0, -bulletSpeed, true));
-                } else {
-                    bullets.push(new Bullet(this.x, this.y - 30, 0, -bulletSpeed, true));
-                    bullets.push(new Bullet(this.x - 20, this.y - 20, -2, -bulletSpeed * 0.9, true));
-                    bullets.push(new Bullet(this.x + 20, this.y - 20, 2, -bulletSpeed * 0.9, true));
+                // 武器类型：0=单发, 1=双发, 2=三发, 3=散弹, 4=激光
+                const weaponType = this.weaponType || 0;
+                
+                switch(weaponType) {
+                    case 0: // 单发
+                        bullets.push(new Bullet(this.x, this.y - 30, 0, -bulletSpeed, true));
+                        break;
+                    case 1: // 双发
+                        bullets.push(new Bullet(this.x - 15, this.y - 20, 0, -bulletSpeed, true));
+                        bullets.push(new Bullet(this.x + 15, this.y - 20, 0, -bulletSpeed, true));
+                        break;
+                    case 2: // 三发
+                        bullets.push(new Bullet(this.x, this.y - 30, 0, -bulletSpeed, true));
+                        bullets.push(new Bullet(this.x - 20, this.y - 20, -2, -bulletSpeed * 0.9, true));
+                        bullets.push(new Bullet(this.x + 20, this.y - 20, 2, -bulletSpeed * 0.9, true));
+                        break;
+                    case 3: // 散弹（5发扇形）
+                        for (let i = -2; i <= 2; i++) {
+                            bullets.push(new Bullet(this.x, this.y - 20, i * 1.5, -bulletSpeed * 0.85, true));
+                        }
+                        break;
+                    case 4: // 激光（穿透）
+                        bullets.push(new Bullet(this.x, this.y - 30, 0, -bulletSpeed * 1.5, true, true));
+                        break;
                 }
                 
                 AudioSys.play('shoot');
@@ -437,6 +470,7 @@
             }
 
             hit() {
+                console.log('player.hit() called! life:', life);
                 if (this.invincible || this.shield) {
                     if (this.shield) {
                         this.shield = false;
@@ -450,6 +484,7 @@
                 AudioSys.play('hit');
                 
                 if (life <= 0) {
+                    console.log('Game Over!');
                     gameOver();
                 } else {
                     this.invincible = true;
@@ -460,7 +495,7 @@
 
         // 子弹类
         class Bullet {
-            constructor(x, y, vx, vy, isPlayer) {
+            constructor(x, y, vx, vy, isPlayer, isPiercing = false) {
                 this.x = x;
                 this.y = y;
                 this.vx = vx;
@@ -468,6 +503,8 @@
                 this.isPlayer = isPlayer;
                 this.radius = isPlayer ? 5 : 6;
                 this.damage = isPlayer ? 20 : 10;
+                this.isPiercing = isPiercing; // 激光穿透
+                this.hitList = []; // 记录已击中的敌人
             }
 
             update() {
@@ -584,27 +621,22 @@
             }
 
             isOffscreen() {
-                return this.y > canvas.height + 100;
+                // 死亡或移出屏幕
+                return this.hp <= 0 || this.y > canvas.height + 100;
             }
 
             hit(damage) {
                 this.hp -= damage;
                 
-                // 击中特效
-                for (let i = 0; i < 5; i++) {
-                    particles.push(new Particle(this.x, this.y, '#ff6b6b'));
-                }
-                
                 if (this.hp <= 0) {
                     score += this.score;
                     document.getElementById('scoreDisplay').textContent = score;
-                    
-                    // 爆炸特效
-                    for (let i = 0; i < 15; i++) {
-                        particles.push(new Particle(this.x, this.y, '#ff8800'));
-                    }
-                    
-                    AudioSys.play('explosion');
+                    // 爆炸特效 - 延迟添加避免问题
+                    setTimeout(() => {
+                        for (let i = 0; i < 15; i++) {
+                            particles.push(new Particle(this.x, this.y, '#ff8800'));
+                        }
+                    }, 0);
                     return true;
                 }
                 return false;
@@ -620,10 +652,14 @@
                 this.speed = 2;
                 this.size = 30;
                 
+                // 道具类型: 0=火力升级, 1=护盾, 2=生命, 3=散弹, 4=激光, 5=全清炸弹
                 switch(type) {
-                    case 0: this.icon = '💥'; this.name = '火力'; break;
+                    case 0: this.icon = '💥'; this.name = '火力+'; break;
                     case 1: this.icon = '🛡️'; this.name = '护盾'; break;
                     case 2: this.icon = '❤️'; this.name = '生命'; break;
+                    case 3: this.icon = '🔫'; this.name = '散弹'; break;
+                    case 4: this.icon = '⚡'; this.name = '激光'; break;
+                    case 5: this.icon = '💣'; this.name = '清屏'; break;
                 }
             }
 
@@ -665,6 +701,7 @@
             }
 
             draw() {
+                if (this.life <= 0) return;
                 ctx.globalAlpha = this.life;
                 ctx.fillStyle = this.color;
                 ctx.beginPath();
@@ -707,60 +744,90 @@
             });
         }
 
-        // 碰撞检测
+        // 碰撞检测 - 简化版（带调试）
         function checkCollisions() {
-            // 玩家子弹 vs 敌机
-            bullets.forEach((bullet, bi) => {
-                if (!bullet.isPlayer) return;
+            if (!gameRunning || !player) return;
+            
+            // 调试：记录敌机数量
+            // console.log('enemies:', enemies.length, 'bullets:', bullets.length);
+            
+            // 玩家子弹击中敌机
+            for (let bi = bullets.length - 1; bi >= 0; bi--) {
+                const bullet = bullets[bi];
+                if (!bullet || !bullet.isPlayer) continue;
                 
-                enemies.forEach((enemy, ei) => {
-                    if (Math.abs(bullet.x - enemy.x) < enemy.width/2 &&
-                        Math.abs(bullet.y - enemy.y) < enemy.height/2) {
-                        
+                for (let ei = enemies.length - 1; ei >= 0; ei--) {
+                    const enemy = enemies[ei];
+                    if (!enemy) continue;
+                    
+                    const dx = bullet.x - enemy.x;
+                    const dy = bullet.y - enemy.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    // console.log('bullet hit enemy?', dist, enemy.hp);
+                    if (dist < 30) {
                         bullets.splice(bi, 1);
-                        
-                        if (enemy.hit(bullet.damage)) {
+                        const killed = enemy.hit(bullet.damage);
+                        if (killed) {
                             enemies.splice(ei, 1);
-                            wave++;
-                            document.getElementById('waveDisplay').textContent = wave;
+                            enemiesKilled++;
+                            // console.log('enemy killed! enemiesKilled:', enemiesKilled);
+                            if (enemiesKilled >= 5) {
+                                wave++;
+                                enemiesKilled = 0;
+                                document.getElementById('waveDisplay').textContent = wave;
+                            }
                         }
+                        break;
                     }
-                });
-            });
-
-            // 敌机子弹 vs 玩家
-            bullets.forEach((bullet, bi) => {
-                if (bullet.isPlayer) return;
-                
-                if (Math.abs(bullet.x - player.x) < player.width/2 &&
-                    Math.abs(bullet.y - player.y) < player.height/2) {
-                    
-                    bullets.splice(bi, 1);
-                    player.hit();
                 }
-            });
-
-            // 敌机 vs 玩家
-            enemies.forEach((enemy, ei) => {
-                if (Math.abs(enemy.x - player.x) < (enemy.width + player.width)/2 &&
-                    Math.abs(enemy.y - player.y) < (enemy.height + player.height)/2) {
-                    
+            }
+            
+            // 敌机与玩家碰撞
+            for (let ei = enemies.length - 1; ei >= 0; ei--) {
+                const enemy = enemies[ei];
+                if (!enemy) continue;
+                
+                const dx = enemy.x - player.x;
+                const dy = enemy.y - player.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < 40) {
                     player.hit();
                     enemies.splice(ei, 1);
                     AudioSys.play('explosion');
                 }
-            });
-
-            // 道具 vs 玩家
-            powerups.forEach((powerup, pi) => {
-                if (Math.abs(powerup.x - player.x) < (powerup.size + player.width)/2 &&
-                    Math.abs(powerup.y - player.y) < (powerup.size + player.height)/2) {
-                    
-                    powerups.splice(pi, 1);
+            }
+            
+            // 敌机子弹击中玩家
+            for (let bi = bullets.length - 1; bi >= 0; bi--) {
+                const bullet = bullets[bi];
+                if (!bullet || bullet.isPlayer) continue;
+                
+                const dx = bullet.x - player.x;
+                const dy = bullet.y - player.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < 25) {
+                    bullets.splice(bi, 1);
+                    player.hit();
+                }
+            }
+            
+            // 道具
+            for (let pi = powerups.length - 1; pi >= 0; pi--) {
+                const p = powerups[pi];
+                if (!p) continue;
+                
+                const dx = p.x - player.x;
+                const dy = p.y - player.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist < 35) {
                     AudioSys.play('powerup');
                     
-                    switch(powerup.type) {
-                        case 0: // 火力
+                    switch(p.type) {
+                        case 0: // 火力+
                             player.powerLevel = Math.min(3, player.powerLevel + 1);
                             break;
                         case 1: // 护盾
@@ -770,9 +837,29 @@
                             life = Math.min(5, life + 1);
                             document.getElementById('lifeDisplay').textContent = life;
                             break;
+                        case 3: // 散弹武器
+                            player.weaponType = 3;
+                            setTimeout(() => player.weaponType = 0, 10000); // 持续10秒
+                            break;
+                        case 4: // 激光武器
+                            player.weaponType = 4;
+                            setTimeout(() => player.weaponType = 0, 10000);
+                            break;
+                        case 5: // 清屏炸弹
+                            enemies.forEach(e => {
+                                e.hp = 0;
+                                score += 10;
+                            });
+                            // 粒子特效
+                            for (let i = 0; i < 50; i++) {
+                                particles.push(new Particle(canvas.width/2, canvas.height/2, '#ff0'));
+                            }
+                            break;
                     }
+                    
+                    powerups.splice(pi, 1);
                 }
-            });
+            }
         }
 
         // 生成敌机
@@ -822,11 +909,12 @@
             });
             
             // 更新敌机
-            enemies = enemies.filter(enemy => {
+            for (const enemy of enemies) {
                 enemy.update();
                 enemy.draw();
-                return !enemy.isOffscreen();
-            });
+            }
+            // 移除出屏幕的敌机
+            enemies = enemies.filter(e => !e.isOffscreen());
             
             // 更新道具
             powerups = powerups.filter(powerup => {
@@ -869,6 +957,7 @@
             score = 0;
             wave = 1;
             life = 3;
+            enemiesKilled = 0;
             bullets = [];
             enemies = [];
             powerups = [];
