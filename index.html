@@ -354,26 +354,15 @@
                 this.invincible = false;
                 this.invincibleTime = 0;
                 this.shield = false;
-                // 惯性系统
-                this.velocityX = 0;
-                this.maxSpeed = 15;
             }
 
             update() {
-                // 陀螺仪控制 - 带惯性
+                // 陀螺仪控制
                 if (useGyro && Math.abs(gyroData.gamma) > 5) {
-                    const targetVelocity = gyroData.gamma * 0.5;
-                    this.velocityX += (targetVelocity - this.velocityX) * 0.1;
+                    this.x += gyroData.gamma * 0.15;
                 } else if (touchX !== null) {
-                    const targetVelocity = (touchX - this.x) * 0.3;
-                    this.velocityX += (targetVelocity - this.velocityX) * 0.15;
-                } else {
-                    this.velocityX *= 0.92;
-                }
-                
-                // 限制最大速度
-                this.velocityX = Math.max(-this.maxSpeed, Math.min(this.maxSpeed, this.velocityX));
-                this.x += this.velocityX;
+                    // 触摸控制
+                    const targetX = touchX;
                     this.x += (targetX - this.x) * 0.1;
                 }
 
